@@ -1,0 +1,37 @@
+name: 박스 시세 갱신
+
+# 공용 시세 서버: 4시간마다 크림·중고나라·번개장터를 읽어 data/prices.json 을 갱신한다.
+# 앱은 raw.githubusercontent.com 의 이 파일을 받아 쓴다.
+on:
+  schedule:
+    - cron: "17 */4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prices
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: 시세 읽기
+        run: java -Dfile.encoding=UTF-8 -jar server/hitbox-server.jar data/prices.json data/prices.json
+      - name: 결과 올리기
+        run: |
+          git config user.name "hitbox-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/prices.json
+          git diff --cached --quiet && exit 0
+          git commit -q -m "시세 갱신 $(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M')"
+          git pull -q --rebase
+          git push -q
