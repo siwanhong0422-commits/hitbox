@@ -1,10 +1,10 @@
 name: 박스 시세 갱신
 
-# 공용 시세 서버: 4시간마다 크림·중고나라·번개장터를 읽어 data/prices.json 을 갱신한다.
+# 공용 시세 서버: 30분마다 크림·중고나라·번개장터를 읽어 data/prices.json 을 갱신한다.
 # 앱은 raw.githubusercontent.com 의 이 파일을 받아 쓴다.
 on:
   schedule:
-    - cron: "17 */4 * * *"
+    - cron: "7,37 * * * *"
   workflow_dispatch:
 
 permissions:
