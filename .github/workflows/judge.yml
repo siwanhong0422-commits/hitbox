@@ -1,10 +1,11 @@
 name: 설문 AI 판별
 
-# 설문 사이트(https://hitbox-siwan.web.app)에 들어온 장소를 10분마다 AI(Google Gemini 무료 등급)가 기준대로 보고,
+# 설문 사이트(https://hitbox-siwan.web.app)에 들어온 장소를 10분마다 기준대로 보고,
 # 통과한 것만 힛박스 앱 지도(Firestore places)에 올린다. 결과는 제출 문서(submissions)에 적혀 사이트 완료 화면에 뜬다.
-# 비밀값 (저장소 Settings → Secrets and variables → Actions):
-#   FIREBASE_SERVICE_ACCOUNT  판별기 전용 서비스 계정 키 JSON (역할: Cloud Datastore 사용자)
-#   GEMINI_API_KEY            aistudio.google.com 에서 무료로 받은 키 (없으면 규칙으로 확실한 것만 거르고 나머지는 기다림)
+#   1) 규칙: 링크·전화번호·장난 글·한국 밖·중복을 바로 거른다 (가볍다)
+#   2) AI: 규칙으로 못 거른 제출이 남았을 때만, 이 서버 안에서 무료 공개 모델(Ollama gemma3:4b)을 띄워 판정한다 — 키·요금 없음
+# 비밀값: FIREBASE_SERVICE_ACCOUNT 판별기 전용 서비스 계정 키 JSON (역할: Cloud Datastore 사용자)
+# 모델을 바꾸려면 저장소 변수 HITBOX_OLLAMA_MODEL (예: gemma3:1b 더 빠름, gemma4:e2b 더 똑똑함)
 # 손으로 돌릴 때 "selftest" 를 켜면 진짜 데이터는 안 건드리고 시험 제출로 AI 판정만 확인한다.
 on:
   schedule:
@@ -23,10 +24,13 @@ concurrency:
   group: judge
   cancel-in-progress: false
 
+env:
+  MODEL: ${{ vars.HITBOX_OLLAMA_MODEL || 'gemma3:4b' }}
+
 jobs:
   judge:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,9 +39,35 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - name: AI 판별
+
+      - name: 규칙 판별
+        id: rules
+        if: ${{ !inputs.selftest }}
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          HITBOX_JUDGE_MODEL: ${{ vars.HITBOX_JUDGE_MODEL }}
+        run: java -Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -jar server/hitbox-judge.jar
+
+      - name: AI 모델 캐시
+        if: ${{ inputs.selftest || steps.rules.outputs.waiting > 0 }}
+        uses: actions/cache@v4
+        with:
+          path: ~/.ollama/models
+          key: ollama-${{ env.MODEL }}
+
+      - name: AI 모델 띄우기
+        if: ${{ inputs.selftest || steps.rules.outputs.waiting > 0 }}
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          # 설치가 띄운 서비스 대신, 캐시 폴더를 쓰는 서버를 직접 띄운다
+          sudo systemctl stop ollama 2>/dev/null || true
+          mkdir -p ~/.ollama/models
+          OLLAMA_MODELS=~/.ollama/models nohup ollama serve > /tmp/ollama.log 2>&1 &
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:11434/api/version >/dev/null && break; sleep 1; done
+          OLLAMA_MODELS=~/.ollama/models ollama pull "$MODEL"
+
+      - name: AI 판별
+        if: ${{ inputs.selftest || steps.rules.outputs.waiting > 0 }}
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          OLLAMA_MODEL: ${{ env.MODEL }}
         run: java -Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -jar server/hitbox-judge.jar ${{ inputs.selftest && 'selftest' || '' }}
